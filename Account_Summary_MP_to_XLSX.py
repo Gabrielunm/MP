@@ -11,7 +11,7 @@ import tempfile
 import streamlit as st
 
 # ---------------------------
-# Lógica original sin modificar
+# Lógica original sin modificar (con modificaciones menores para consolidado)
 # ---------------------------
 
 # Expresiones regulares optimizadas
@@ -45,7 +45,7 @@ def extract_client_info(text):
                 break
     return client_name
 
-# Función para calcular el periodo
+# Función para calcular el periodo a partir de un DataFrame
 def calculate_period(df):
     min_date = pd.to_datetime(df['Fecha'], format='%d-%m-%Y').min().strftime('%d-%m-%Y')
     max_date = pd.to_datetime(df['Fecha'], format='%d-%m-%Y').max().strftime('%d-%m-%Y')
@@ -150,10 +150,10 @@ def process_single_file(args):
     sanitized_period = sanitize_filename(period)
     output_excel_name = f"{sanitized_original_filename}_RESUMEN_MERCADOPAGO_{sanitized_period}.xlsx"
     excel_data = convert_df_to_excel(df)
-    # Liberar memoria
-    del df
+    # Liberar memoria de forma explícita
     gc.collect()
-    return (file, {'excel_data': excel_data, 'output_excel_name': output_excel_name})
+    # Retornamos además el DataFrame para el consolidado
+    return (file, {'excel_data': excel_data, 'output_excel_name': output_excel_name, 'df': df})
 
 # ---------------------------
 # Interfaz en Streamlit (Adaptada para Streamlit Space)
@@ -163,6 +163,7 @@ def process_uploaded_files(uploaded_files):
     """
     Procesa los archivos PDF subidos y retorna un diccionario:
     { nombre_del_archivo: { 'excel_data': bytes, 'output_excel_name': str } }
+    Además, si se suben varios archivos se agrega una entrada 'CONSOLIDADO' para el Excel consolidado.
     """
     if not uploaded_files:
         st.warning("No se detectaron archivos PDF subidos.")
@@ -210,6 +211,24 @@ def process_uploaded_files(uploaded_files):
     progress_bar.progress(100)
     progress_text.text("Archivos procesados. Preparando tus descargas...")
 
+    # Generar consolidado si se subieron varios archivos
+    if len(processed) > 1:
+        dfs = []
+        for file, info in processed:
+            # Extraemos y eliminamos el DataFrame de la info individual para no duplicarlo en memoria
+            df = info.pop('df')
+            df['Archivo'] = os.path.basename(file)
+            dfs.append(df)
+        consolidated_df = pd.concat(dfs, ignore_index=True)
+        period = calculate_period(consolidated_df)
+        sanitized_period = sanitize_filename(period)
+        consolidated_filename = f"CONSOLIDADO_MERCADOPAGO_{sanitized_period}.xlsx"
+        consolidated_excel = convert_df_to_excel(consolidated_df)
+        processed_files["CONSOLIDADO"] = {
+            'excel_data': consolidated_excel,
+            'output_excel_name': consolidated_filename
+        }
+
     # Eliminar archivos temporales
     for f in temp_files:
         try:
@@ -234,9 +253,14 @@ def main():
                 processed_files = process_uploaded_files(uploaded_files)
             if processed_files:
                 st.write("### Descarga tus archivos Excel:")
-                for original_file, file_info in processed_files.items():
+                for key, file_info in processed_files.items():
+                    # Si la clave es "CONSOLIDADO", se muestra un botón especial
+                    if key == "CONSOLIDADO":
+                        label = f"Descargar {file_info['output_excel_name']} (Consolidado)"
+                    else:
+                        label = f"Descargar {file_info['output_excel_name']}"
                     st.download_button(
-                        label=f"Descargar {file_info['output_excel_name']}",
+                        label=label,
                         data=file_info['excel_data'],
                         file_name=file_info['output_excel_name'],
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
